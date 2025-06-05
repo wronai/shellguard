@@ -1,0 +1,42 @@
+# ansible/playbooks/verify-environment.yml
+---
+- name: Verify ShellGuard Environment
+  hosts: all
+  gather_facts: yes
+
+  tasks:
+    - name: Check Docker containers are running
+      uri:
+        url: "http://localhost:2375/containers/json"
+        method: GET
+      register: docker_containers
+      delegate_to: localhost
+      when: inventory_hostname == 'localhost'
+
+    - name: Verify ShellGuard is installed
+      stat:
+        path: "{{ ansible_user_dir }}/shellguard.sh"
+      register: shellguard_file
+      when: inventory_hostname in groups['docker_containers']
+
+    - name: Check ShellGuard configuration
+      shell: |
+        source ~/.bashrc
+        command -v status >/dev/null && echo "STATUS_OK" || echo "STATUS_MISSING"
+        command -v health >/dev/null && echo "HEALTH_OK" || echo "HEALTH_MISSING"
+        command -v backup >/dev/null && echo "BACKUP_OK" || echo "BACKUP_MISSING"
+      args:
+        executable: /bin/bash
+      register: shellguard_commands
+      when: inventory_hostname in groups['docker_containers']
+
+    - name: Environment Report
+      debug:
+        msg: |
+          📊 ENVIRONMENT VERIFICATION:
+          =============================
+          Host: {{ inventory_hostname }}
+          ShellGuard File: {{ 'EXISTS' if shellguard_file.stat.exists else 'MISSING' }}
+          Commands Available: {{ shellguard_commands.stdout_lines if shellguard_commands is defined else 'N/A' }}
+          =============================
+      when: inventory_hostname in groups['docker_containers']

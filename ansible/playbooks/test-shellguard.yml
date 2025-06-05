@@ -1,0 +1,151 @@
+# ansible/playbooks/test-shellguard.yml
+---
+- name: Test ShellGuard Functionality
+  hosts: docker_containers
+  gather_facts: no
+
+  vars:
+    test_results: []
+
+  tasks:
+    - name: Test 1 - Basic ShellGuard Status
+      shell: |
+        source ~/.bashrc
+        status
+      args:
+        executable: /bin/bash
+      register: test_status
+
+    - name: Verify status command works
+      assert:
+        that:
+          - test_status.rc == 0
+          - "'ShellGuard STATUS' in test_status.stdout"
+        fail_msg: "ShellGuard status command failed"
+        success_msg: "✅ Status command works"
+
+    - name: Test 2 - Health Check
+      shell: |
+        source ~/.bashrc
+        health
+      args:
+        executable: /bin/bash
+      register: test_health
+
+    - name: Verify health command works
+      assert:
+        that:
+          - test_health.rc == 0
+          - "'Project health' in test_health.stdout"
+        fail_msg: "ShellGuard health command failed"
+        success_msg: "✅ Health command works"
+
+    - name: Test 3 - Dangerous Command Blocking
+      shell: |
+        source ~/.bashrc
+        rm -rf /tmp/test 2>&1 || echo "BLOCKED_AS_EXPECTED"
+      args:
+        executable: /bin/bash
+      register: test_block
+
+    - name: Verify dangerous command is blocked
+      assert:
+        that:
+          - "'BLOCKED' in test_block.stdout or 'Dangerous pattern' in test_block.stdout"
+        fail_msg: "Dangerous command was not blocked!"
+        success_msg: "✅ Dangerous commands blocked"
+
+    - name: Test 4 - Python Security Check
+      block:
+        - name: Create malicious Python file
+          copy:
+            content: |
+              import os
+              os.system('echo "This would be dangerous"')
+            dest: "{{ ansible_user_dir }}/malicious.py"
+
+        - name: Test Python security scanning
+          shell: |
+            source ~/.bashrc
+            python malicious.py 2>&1 || echo "PYTHON_BLOCKED"
+          args:
+            executable: /bin/bash
+          register: test_python_security
+
+        - name: Verify Python security works
+          assert:
+            that:
+              - "'Dangerous Python code' in test_python_security.stdout or 'PYTHON_BLOCKED' in test_python_security.stdout"
+            fail_msg: "Python security check failed"
+            success_msg: "✅ Python security works"
+
+        - name: Cleanup malicious file
+          file:
+            path: "{{ ansible_user_dir }}/malicious.py"
+            state: absent
+
+    - name: Test 5 - Backup Functionality
+      shell: |
+        source ~/.bashrc
+        echo "test content" > test_file.txt
+        backup
+        echo $?
+      args:
+        executable: /bin/bash
+      register: test_backup
+
+    - name: Verify backup works
+      assert:
+        that:
+          - test_backup.stdout_lines[-1] == "0"
+          - "'backup created' in test_backup.stdout.lower()"
+        fail_msg: "Backup functionality failed"
+        success_msg: "✅ Backup functionality works"
+
+    - name: Test 6 - Safe Commands
+      shell: |
+        source ~/.bashrc
+        echo "test" > safe_test.txt
+        safe_rm safe_test.txt
+        echo $?
+      args:
+        executable: /bin/bash
+      register: test_safe_rm
+
+    - name: Verify safe commands work
+      assert:
+        that:
+          - test_safe_rm.stdout_lines[-1] == "0"
+        fail_msg: "Safe commands failed"
+        success_msg: "✅ Safe commands work"
+
+    - name: Collect all test results
+      set_fact:
+        all_tests_passed: >-
+          {{
+            test_status.rc == 0 and
+            test_health.rc == 0 and
+            ('BLOCKED' in test_block.stdout or 'Dangerous pattern' in test_block.stdout) and
+            ('Dangerous Python code' in test_python_security.stdout or 'PYTHON_BLOCKED' in test_python_security.stdout) and
+            test_backup.stdout_lines[-1] == "0" and
+            test_safe_rm.stdout_lines[-1] == "0"
+          }}
+
+    - name: Final Test Report
+      debug:
+        msg: |
+          🧪 SHELLGUARD TEST RESULTS:
+          ================================
+          ✅ Status Command: {{ 'PASS' if test_status.rc == 0 else 'FAIL' }}
+          ✅ Health Check: {{ 'PASS' if test_health.rc == 0 else 'FAIL' }}
+          ✅ Command Blocking: {{ 'PASS' if ('BLOCKED' in test_block.stdout or 'Dangerous pattern' in test_block.stdout) else 'FAIL' }}
+          ✅ Python Security: {{ 'PASS' if ('Dangerous Python code' in test_python_security.stdout or 'PYTHON_BLOCKED' in test_python_security.stdout) else 'FAIL' }}
+          ✅ Backup System: {{ 'PASS' if test_backup.stdout_lines[-1] == "0" else 'FAIL' }}
+          ✅ Safe Commands: {{ 'PASS' if test_safe_rm.stdout_lines[-1] == "0" else 'FAIL' }}
+          ================================
+          Overall: {{ 'ALL TESTS PASSED! 🎉' if all_tests_passed else 'SOME TESTS FAILED! ❌' }}
+
+    - name: Fail if any test failed
+      fail:
+        msg: "One or more ShellGuard tests failed!"
+      when: not all_tests_passed

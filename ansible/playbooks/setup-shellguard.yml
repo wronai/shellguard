@@ -1,0 +1,44 @@
+# ansible/playbooks/setup-shellguard.yml
+---
+- name: Setup ShellGuard in Docker Containers
+  hosts: docker_containers
+  gather_facts: yes
+
+  tasks:
+    - name: Ensure ShellGuard directory exists
+      file:
+        path: "{{ ansible_user_dir }}/.shellguard"
+        state: directory
+        mode: '0755'
+
+    - name: Copy ShellGuard configuration
+      template:
+        src: ../roles/shellguard/templates/shellguard.sh.j2
+        dest: "{{ ansible_user_dir }}/shellguard.sh"
+        mode: '0755'
+        backup: yes
+
+    - name: Initialize ShellGuard
+      shell: |
+        source {{ ansible_user_dir }}/shellguard.sh
+        status
+      args:
+        executable: /bin/bash
+      register: shellguard_init
+
+    - name: Display ShellGuard status
+      debug:
+        var: shellguard_init.stdout_lines
+
+    - name: Add ShellGuard to shell profile
+      lineinfile:
+        path: "{{ ansible_user_dir }}/.bashrc"
+        line: "source {{ ansible_user_dir }}/shellguard.sh"
+        create: yes
+        backup: yes
+
+    - name: Create test workspace
+      file:
+        path: "{{ ansible_user_dir }}/test-workspace"
+        state: directory
+        mode: '0755'
