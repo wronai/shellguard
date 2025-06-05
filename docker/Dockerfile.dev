@@ -1,6 +1,9 @@
 # docker/Dockerfile.dev
 FROM ubuntu:22.04
 
+# Set non-interactive frontend for apt
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install essential tools
 RUN apt-get update && apt-get install -y \
     bash \
@@ -12,30 +15,45 @@ RUN apt-get update && apt-get install -y \
     npm \
     jq \
     rsync \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# Create development user
+# Create development user with passwordless sudo
 RUN useradd -m -s /bin/bash developer && \
-    usermod -aG sudo developer
+    usermod -aG sudo developer && \
+    echo 'developer ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/developer && \
+    chmod 0440 /etc/sudoers.d/developer
 
 # Set working directory
 WORKDIR /workspace
 
+# Create necessary directories with correct permissions
+RUN mkdir -p /home/developer/.shellguard/backups && \
+    chown -R developer:developer /home/developer/.shellguard
+
 # Copy ShellGuard
 COPY shellguard.sh /usr/local/bin/shellguard.sh
-RUN chmod +x /usr/local/bin/shellguard.sh
+RUN chmod +x /usr/local/bin/shellguard.sh && \
+    chown developer:developer /usr/local/bin/shellguard.sh
 
 # Create symlink for easy access
-RUN ln -s /usr/local/bin/shellguard.sh /usr/local/bin/shellguard
+RUN ln -s /usr/local/bin/shellguard.sh /usr/local/bin/shellguard && \
+    chown -h developer:developer /usr/local/bin/shellguard
 
 # Switch to developer user
 USER developer
+WORKDIR /home/developer
+
+# Create default state file if it doesn't exist
+RUN echo '{"health_score": 100, "last_backup": "", "commands_blocked": 0, "files_changed": 0, "session_start": "", "warnings": []}' > /home/developer/.shellguard/state.json
 
 # Initialize shell with ShellGuard
-RUN echo 'source /usr/local/bin/shellguard.sh' >> ~/.bashrc
+RUN echo 'source /usr/local/bin/shellguard.sh' >> ~/.bashrc && \
+    echo 'export SHELLGUARD_STRICT_MODE=true' >> ~/.bashrc && \
+    echo 'export SHELLGUARD_AUTO_BACKUP=true' >> ~/.bashrc
 
 # Create sample project structure
 RUN mkdir -p /home/developer/{src,tests,docs}
 
 WORKDIR /workspace
-CMD ["/bin/bash"]
+CMD ["/bin/bash", "-l"]
