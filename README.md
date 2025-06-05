@@ -1,5 +1,3 @@
-# shellguard
-"Shell Guardian for Safe Development" - "Your shell's bodyguard"
 # 🛡️ ShellGuard
 
 **Your shell's bodyguard - Intelligent command interceptor and safety net for developers**

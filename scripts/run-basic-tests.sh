@@ -3,32 +3,84 @@
 
 set -e
 
-echo "🚀 Starting basic ShellGuard tests..."
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to run a test
+run_test() {
+    local test_name="$1"
+    local command="$2"
+    local expected_status=${3:-0}  # Default to expecting success (exit code 0)
+    
+    echo -e "${YELLOW}▶ Running test: ${test_name}${NC}"
+    
+    # Run the command and capture output and status
+    local output
+    local status
+    
+    # Use eval to properly handle the command string
+    output=$(eval "$command" 2>&1)
+    status=$?
+    
+    # Check if the command succeeded or failed as expected
+    if [ $status -eq $expected_status ]; then
+        echo -e "  ${GREEN}✓ PASSED: ${test_name}${NC}"
+        return 0
+    else
+        echo -e "  ${RED}✗ FAILED: ${test_name}${NC}"
+        echo -e "  Command: ${command}"
+        echo -e "  Exit status: ${status} (expected ${expected_status})"
+        if [ -n "$output" ]; then
+            echo -e "  Output:\n${output}"
+        fi
+        return 1
+    fi
+}
+
+# Main test execution
+echo -e "${YELLOW}🚀 Starting ShellGuard Test Suite${NC}"
+echo -e "${YELLOW}================================${NC}\n"
+
+# Ensure Docker containers are running
+if ! docker-compose -f docker/docker-compose.yml ps | grep -q "Up"; then
+    echo -e "${YELLOW}Starting Docker containers...${NC}"
+    docker-compose -f docker/docker-compose.yml up -d
+    # Give containers time to start
+    sleep 10
+fi
 
 # Test 1: Verify ShellGuard is loaded
-if ! docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'type shellguard >/dev/null 2>&1'; then
-    echo "❌ Test 1 Failed: ShellGuard not loaded in dev container"
-    exit 1
-else
-    echo "✅ Test 1 Passed: ShellGuard is loaded in dev container"
-fi
+run_test "ShellGuard is loaded in dev container" \
+    "docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'type shellguard >/dev/null 2>&1'"
 
 # Test 2: Verify basic commands work
-if ! docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'shellguard status'; then
-    echo "❌ Test 2 Failed: 'shellguard status' command failed"
-    exit 1
-else
-    echo "✅ Test 2 Passed: 'shellguard status' works"
-fi
+run_test "'shellguard status' command works" \
+    "docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'source /usr/local/bin/shellguard.sh && shellguard status'"
 
 # Test 3: Verify dangerous command blocking
-output=$(docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'rm -rf /tmp/important 2>&1 || echo "BLOCKED"')
-if [[ "$output" != *"BLOCKED"* ]]; then
-    echo "❌ Test 3 Failed: Dangerous command was not blocked"
-    exit 1
+output=$(docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'source /usr/local/bin/shellguard.sh && rm -rf /tmp/important 2>&1 || echo "BLOCKED"')
+if [[ "$output" == *"BLOCKED"* ]]; then
+    echo -e "  ${GREEN}✓ PASSED: Dangerous commands are blocked${NC}"
 else
-    echo "✅ Test 3 Passed: Dangerous commands are blocked"
+    echo -e "  ${RED}✗ FAILED: Dangerous command was not blocked${NC}"
+    echo -e "  Command: rm -rf /tmp/important"
+    echo -e "  Output: ${output}"
+    exit 1
 fi
 
-echo "🎉 All basic tests passed successfully!"
+# Test 4: Verify safe commands work
+run_test "Safe commands are allowed" \
+    "docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'source /usr/local/bin/shellguard.sh && ls -la /tmp'"
+
+# Test 5: Verify ShellGuard environment variables are set
+run_test "ShellGuard environment variables are set" \
+    "docker-compose -f docker/docker-compose.yml exec -T dev bash -c 'source /usr/local/bin/shellguard.sh && [ -n "\$SHELLGUARD_STRICT_MODE" ] && [ -n "\$SHELLGUARD_AUTO_BACKUP" ]'"
+
+echo -e "\n${YELLOW}================================${NC}"
+echo -e "${GREEN}✅ All basic tests completed successfully!${NC}"
+echo -e "${YELLOW}================================${NC}\n"
+
 exit 0
