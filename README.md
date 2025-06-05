@@ -8,6 +8,11 @@
 
 ShellGuard is a lightweight, intelligent shell wrapper that protects your development environment from dangerous commands, provides automatic backups, and gives you instant rollback capabilities. Perfect for controlling AI assistants, preventing accidents, and maintaining project health.
 
+## Quick install:
+```bash
+curl -fsSL https://raw.githubusercontent.com/wronai/shellguard/main/shellguard.sh | bash
+```
+
 ## 🚀 Quick Start
 
 ```bash
