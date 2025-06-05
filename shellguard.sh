@@ -1,9 +1,17 @@
 #!/bin/bash
-# shellguard.sh - Prosty shell kontrolujący LLM
-# Użycie: source shellguard.sh (jeden raz na sesję)
+# shellguard.sh - Fixed version with performance optimizations
+# Your shell's bodyguard - because prevention is better than recovery
 
 # ========================================
-# KOLORY I IKONKI
+# PERFORMANCE CONFIGURATION
+# ========================================
+MAX_FIND_DEPTH=2
+MAX_FILES_TO_CHECK=20
+SCAN_TIMEOUT=3
+MAX_MONITOR_FILES=1000
+
+# ========================================
+# COLORS AND ICONS
 # ========================================
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -12,22 +20,30 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # ========================================
-# STAN SYSTEMU
+# SYSTEM STATE
 # ========================================
-LLM_GUARD_DIR="$HOME/.shellguard"
+LLM_GUARD_DIR="$HOME/.llm_guard"
 STATE_FILE="$LLM_GUARD_DIR/state.json"
 BACKUP_DIR="$LLM_GUARD_DIR/backups"
 BLOCKED_PATTERNS_FILE="$LLM_GUARD_DIR/blocked.txt"
 
-# Utwórz katalogi jeśli nie istnieją
-mkdir -p "$LLM_GUARD_DIR" "$BACKUP_DIR"
+# ========================================
+# SAFE INITIALIZATION
+# ========================================
+init_llm_guard() {
+    # Create directories safely
+    mkdir -p "$LLM_GUARD_DIR" "$BACKUP_DIR" 2>/dev/null || true
 
-# ========================================
-# INICJALIZACJA
-# ========================================
-init_shellguard() {
-    if [[ ! -f "$STATE_FILE" ]]; then
+    # Check if we have jq, if not - use simpler version
+    if ! command -v jq >/dev/null 2>&1; then
+        # Simple state file without jq
         cat > "$STATE_FILE" << 'EOF'
+{"health_score": 100, "commands_blocked": 0, "last_backup": "", "session_start": ""}
+EOF
+    else
+        # Normal state file with jq
+        if [[ ! -f "$STATE_FILE" ]]; then
+            cat > "$STATE_FILE" << 'EOF'
 {
   "health_score": 100,
   "last_backup": "",
@@ -37,8 +53,13 @@ init_shellguard() {
   "warnings": []
 }
 EOF
+        fi
+
+        # Save session start time
+        jq --arg time "$(date -Iseconds)" '.session_start = $time' "$STATE_FILE" > /tmp/sg_tmp.json && mv /tmp/sg_tmp.json "$STATE_FILE" 2>/dev/null || true
     fi
 
+    # Create blocked patterns if doesn't exist
     if [[ ! -f "$BLOCKED_PATTERNS_FILE" ]]; then
         cat > "$BLOCKED_PATTERNS_FILE" << 'EOF'
 rm -rf
@@ -58,9 +79,6 @@ format
 EOF
     fi
 
-    # Zapisz czas rozpoczęcia sesji
-    jq --arg time "$(date -Iseconds)" '.session_start = $time' "$STATE_FILE" > tmp.json && mv tmp.json "$STATE_FILE"
-
     echo -e "${GREEN}🛡️  LLM Guard activated!${NC}"
     echo -e "${BLUE}📊 Use 'status' to check system health${NC}"
     echo -e "${BLUE}🔒 Use 'backup' before big changes${NC}"
@@ -68,19 +86,22 @@ EOF
 }
 
 # ========================================
-# SPRAWDZANIE BEZPIECZEŃSTWA
+# SECURITY CHECKING
 # ========================================
 check_dangerous_command() {
     local cmd="$1"
 
     while IFS= read -r pattern; do
+        [[ -z "$pattern" ]] && continue
         if [[ "$cmd" == *"$pattern"* ]]; then
             echo -e "${RED}🚨 BLOCKED: Dangerous pattern detected: $pattern${NC}"
             echo -e "${RED}💀 Command: $cmd${NC}"
 
-            # Zwiększ licznik zablokowanych komend
-            local blocked=$(jq -r '.commands_blocked' "$STATE_FILE")
-            jq --argjson blocked "$((blocked + 1))" '.commands_blocked = $blocked' "$STATE_FILE" > tmp.json && mv tmp.json "$STATE_FILE"
+            # Increase blocked commands counter (simple version)
+            if command -v jq >/dev/null 2>&1; then
+                local blocked=$(jq -r '.commands_blocked // 0' "$STATE_FILE" 2>/dev/null || echo "0")
+                jq --argjson blocked "$((blocked + 1))" '.commands_blocked = $blocked' "$STATE_FILE" > /tmp/sg_tmp.json && mv /tmp/sg_tmp.json "$STATE_FILE" 2>/dev/null || true
+            fi
 
             return 1
         fi
@@ -90,118 +111,80 @@ check_dangerous_command() {
 }
 
 # ========================================
-# AUTO-BACKUP
-# ========================================
-create_backup() {
-    local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local backup_name="backup_$timestamp"
-
-    echo -e "${YELLOW}📦 Creating backup: $backup_name${NC}"
-
-    # Git backup jeśli to repo
-    if [[ -d ".git" ]]; then
-        git add . 2>/dev/null
-        git commit -m "LLM Guard auto-backup $timestamp" 2>/dev/null
-        echo -e "${GREEN}✅ Git backup created${NC}"
-    fi
-
-    # File backup
-    if command -v rsync >/dev/null 2>&1; then
-        rsync -a --exclude='.git' --exclude='node_modules' --exclude='__pycache__' \
-              . "$BACKUP_DIR/$backup_name/" 2>/dev/null
-        echo -e "${GREEN}✅ File backup created in $BACKUP_DIR/$backup_name${NC}"
-    else
-        cp -r . "$BACKUP_DIR/$backup_name/" 2>/dev/null
-        echo -e "${GREEN}✅ File backup created${NC}"
-    fi
-
-    # Zapisz info o backup
-    jq --arg backup "$backup_name" '.last_backup = $backup' "$STATE_FILE" > tmp.json && mv tmp.json "$STATE_FILE"
-
-    return 0
-}
-
-# ========================================
-# ROLLBACK
-# ========================================
-rollback_changes() {
-    echo -e "${YELLOW}🔄 Rolling back changes...${NC}"
-
-    # Git rollback jeśli możliwe
-    if [[ -d ".git" ]] && git log --oneline -1 | grep -q "LLM Guard auto-backup"; then
-        git reset --hard HEAD~1 2>/dev/null
-        echo -e "${GREEN}✅ Git rollback completed${NC}"
-        return 0
-    fi
-
-    # File rollback z najnowszego backup
-    local last_backup=$(jq -r '.last_backup' "$STATE_FILE")
-    if [[ -n "$last_backup" && -d "$BACKUP_DIR/$last_backup" ]]; then
-        echo -e "${YELLOW}🔄 Restoring from backup: $last_backup${NC}"
-
-        # Usuń wszystko oprócz ukrytych plików systemu
-        find . -maxdepth 1 -not -name '.*' -not -name '.git' -exec rm -rf {} + 2>/dev/null
-
-        # Przywróć z backup
-        cp -r "$BACKUP_DIR/$last_backup/"* . 2>/dev/null
-        echo -e "${GREEN}✅ Files restored from backup${NC}"
-        return 0
-    fi
-
-    echo -e "${RED}❌ No backup found for rollback${NC}"
-    return 1
-}
-
-# ========================================
-# SPRAWDZENIE STANU
+# IMPROVED PROJECT HEALTH CHECK
 # ========================================
 check_project_health() {
-    echo -e "${BLUE}🔍 Checking project health...${NC}"
+    echo -e "${BLUE}🔍 Checking project health (smart scan)...${NC}"
 
     local issues=0
     local health_score=100
+    local files_checked=0
 
-    # Sprawdź składnię Python
-    if find . -name "*.py" -type f | head -1 | grep -q .; then
-        echo -e "${BLUE}🐍 Checking Python syntax...${NC}"
-        while IFS= read -r -d '' file; do
-            if ! python -m py_compile "$file" 2>/dev/null; then
+    # Check current directory file count to adjust scanning
+    local total_files=$(find . -maxdepth $MAX_FIND_DEPTH -type f 2>/dev/null | wc -l)
+    local scan_limit=$MAX_FILES_TO_CHECK
+
+    if [[ $total_files -gt $MAX_MONITOR_FILES ]]; then
+        echo -e "${YELLOW}⚠️  Large project detected ($total_files files), using limited scan${NC}"
+        scan_limit=10
+    fi
+
+    # Check Python syntax - LIMITED SCANNING
+    local python_files=$(find . -maxdepth $MAX_FIND_DEPTH -name "*.py" -type f 2>/dev/null | head -$scan_limit)
+    if [[ -n "$python_files" ]]; then
+        echo -e "${BLUE}🐍 Checking Python syntax ($scan_limit files max)...${NC}"
+
+        while IFS= read -r file && [[ $files_checked -lt $scan_limit ]]; do
+            [[ -z "$file" ]] && continue
+            if ! timeout $SCAN_TIMEOUT python -m py_compile "$file" 2>/dev/null; then
                 echo -e "${RED}❌ Syntax error in: $file${NC}"
                 ((issues++))
                 ((health_score -= 10))
             fi
-        done < <(find . -name "*.py" -type f -print0)
+            ((files_checked++))
+        done <<< "$python_files"
+
+        if [[ $files_checked -gt 0 ]]; then
+            echo -e "${GREEN}✅ Checked $files_checked Python files${NC}"
+        fi
     fi
 
-    # Sprawdź JavaScript/Node
+    # Check JavaScript/Node - QUICK CHECK
     if [[ -f "package.json" ]]; then
         echo -e "${BLUE}📦 Checking Node.js project...${NC}"
-        if ! node -c package.json 2>/dev/null; then
+        if timeout $SCAN_TIMEOUT node -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))" 2>/dev/null; then
+            echo -e "${GREEN}✅ Valid package.json${NC}"
+        else
             echo -e "${RED}❌ Invalid package.json${NC}"
             ((issues++))
             ((health_score -= 15))
         fi
     fi
 
-    # Sprawdź Git status
+    # Check Git status - FAST
     if [[ -d ".git" ]]; then
-        local changed_files=$(git status --porcelain 2>/dev/null | wc -l)
+        local changed_files=$(timeout $SCAN_TIMEOUT git status --porcelain 2>/dev/null | wc -l)
         if [[ $changed_files -gt 10 ]]; then
             echo -e "${YELLOW}⚠️  Many files changed: $changed_files${NC}"
             ((health_score -= 5))
         fi
     fi
 
-    # Sprawdź logi błędów
-    if find . -name "*.log" -exec grep -l "ERROR\|FATAL\|CRITICAL" {} \; | head -1 | grep -q .; then
-        echo -e "${YELLOW}⚠️  Error logs found${NC}"
-        ((health_score -= 5))
+    # Check error logs - LIMITED
+    local error_logs=$(find . -maxdepth 2 -name "*.log" -type f 2>/dev/null | head -3)
+    if [[ -n "$error_logs" ]] && [[ "$error_logs" != "" ]]; then
+        if echo "$error_logs" | xargs timeout $SCAN_TIMEOUT grep -l "ERROR\|FATAL\|CRITICAL" 2>/dev/null | head -1 | grep -q .; then
+            echo -e "${YELLOW}⚠️  Error logs found${NC}"
+            ((health_score -= 5))
+        fi
     fi
 
-    # Zapisz health score
-    jq --argjson score "$health_score" '.health_score = $score' "$STATE_FILE" > tmp.json && mv tmp.json "$STATE_FILE"
+    # Save health score
+    if command -v jq >/dev/null 2>&1; then
+        jq --argjson score "$health_score" '.health_score = $score' "$STATE_FILE" > /tmp/sg_tmp.json && mv /tmp/sg_tmp.json "$STATE_FILE" 2>/dev/null || true
+    fi
 
-    # Podsumowanie
+    # Summary
     if [[ $issues -eq 0 ]]; then
         echo -e "${GREEN}🎉 Project health: GOOD (Score: $health_score/100)${NC}"
         return 0
@@ -212,18 +195,26 @@ check_project_health() {
 }
 
 # ========================================
-# STATUS SYSTEMU
+# IMPROVED STATUS DISPLAY
 # ========================================
 show_status() {
     echo -e "${BLUE}📊 LLM GUARD STATUS${NC}"
     echo "=================================="
 
-    local health_score=$(jq -r '.health_score' "$STATE_FILE")
-    local commands_blocked=$(jq -r '.commands_blocked' "$STATE_FILE")
-    local last_backup=$(jq -r '.last_backup' "$STATE_FILE")
-    local session_start=$(jq -r '.session_start' "$STATE_FILE")
+    # Safe state reading with fallbacks
+    local health_score=100
+    local commands_blocked=0
+    local last_backup=""
+    local session_start=""
 
-    # Health score z kolorami
+    if command -v jq >/dev/null 2>&1 && [[ -f "$STATE_FILE" ]]; then
+        health_score=$(jq -r '.health_score // 100' "$STATE_FILE" 2>/dev/null || echo "100")
+        commands_blocked=$(jq -r '.commands_blocked // 0' "$STATE_FILE" 2>/dev/null || echo "0")
+        last_backup=$(jq -r '.last_backup // ""' "$STATE_FILE" 2>/dev/null || echo "")
+        session_start=$(jq -r '.session_start // ""' "$STATE_FILE" 2>/dev/null || echo "")
+    fi
+
+    # Health score with colors
     if [[ $health_score -ge 80 ]]; then
         echo -e "Health Score: ${GREEN}$health_score/100${NC} ✅"
     elif [[ $health_score -ge 60 ]]; then
@@ -236,16 +227,168 @@ show_status() {
     echo -e "Last Backup: ${BLUE}$last_backup${NC}"
     echo -e "Session Started: ${BLUE}$session_start${NC}"
 
-    # Sprawdź czy są niebezpieczne pliki
-    if find . -name "*.py" -exec grep -l "os.system\|eval(\|exec(" {} \; | head -1 | grep -q .; then
-        echo -e "${RED}🚨 WARNING: Dangerous code patterns detected!${NC}"
+    # QUICK check for dangerous files - current directory only
+    local dangerous_count=$(find . -maxdepth 1 -name "*.py" -type f -exec grep -l "os\.system\|eval(\|exec(" {} \; 2>/dev/null | wc -l)
+    if [[ $dangerous_count -gt 0 ]]; then
+        echo -e "${RED}🚨 WARNING: $dangerous_count files with dangerous patterns in current directory!${NC}"
     fi
 
     echo "=================================="
 }
 
 # ========================================
-# OVERRIDE KOMEND SYSTEMOWYCH
+# QUICK CHECK FOR LLM
+# ========================================
+check() {
+    echo -e "${BLUE}🔍 Quick health check...${NC}"
+
+    local issues=0
+
+    # Very quick check - only obvious problems
+    if [[ -f "package.json" ]] && ! timeout 2 node -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))" 2>/dev/null; then
+        ((issues++))
+    fi
+
+    # Check git status
+    if [[ -d ".git" ]]; then
+        local changed=$(timeout 2 git status --porcelain 2>/dev/null | wc -l)
+        if [[ $changed -gt 20 ]]; then
+            ((issues++))
+        fi
+    fi
+
+    # Check for obvious Python syntax errors in current directory
+    if find . -maxdepth 1 -name "*.py" -type f | head -5 | xargs -I {} timeout 2 python -m py_compile {} 2>&1 | grep -q "SyntaxError"; then
+        ((issues++))
+    fi
+
+    if [[ $issues -eq 0 ]]; then
+        echo -e "${GREEN}✅ SYSTEM OK${NC}"
+        return 0
+    else
+        echo -e "${RED}❌ ISSUES DETECTED${NC}"
+        echo -e "${YELLOW}Run 'health' for details${NC}"
+        return 1
+    fi
+}
+
+# ========================================
+# AUTO-BACKUP
+# ========================================
+create_backup() {
+    local timestamp=$(date +"%Y%m%d_%H%M%S")
+    local backup_name="backup_$timestamp"
+
+    echo -e "${YELLOW}📦 Creating backup: $backup_name${NC}"
+
+    # Git backup if it's a repo
+    if [[ -d ".git" ]]; then
+        git add . 2>/dev/null || true
+        if git commit -m "LLM Guard auto-backup $timestamp" 2>/dev/null; then
+            echo -e "${GREEN}✅ Git backup created${NC}"
+        fi
+    fi
+
+    # File backup
+    local backup_path="$BACKUP_DIR/$backup_name"
+    mkdir -p "$backup_path" 2>/dev/null || true
+
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a --exclude='.git' --exclude='node_modules' --exclude='__pycache__' \
+              --exclude='.llm_guard' . "$backup_path/" 2>/dev/null && \
+        echo -e "${GREEN}✅ File backup created${NC}"
+    else
+        cp -r . "$backup_path/" 2>/dev/null && \
+        echo -e "${GREEN}✅ File backup created${NC}"
+    fi
+
+    # Save backup info
+    if command -v jq >/dev/null 2>&1; then
+        jq --arg backup "$backup_name" '.last_backup = $backup' "$STATE_FILE" > /tmp/sg_tmp.json && mv /tmp/sg_tmp.json "$STATE_FILE" 2>/dev/null || true
+    fi
+
+    return 0
+}
+
+# ========================================
+# ROLLBACK
+# ========================================
+rollback_changes() {
+    echo -e "${YELLOW}🔄 Rolling back changes...${NC}"
+
+    # Git rollback if possible
+    if [[ -d ".git" ]] && git log --oneline -1 2>/dev/null | grep -q "LLM Guard auto-backup"; then
+        if git reset --hard HEAD~1 2>/dev/null; then
+            echo -e "${GREEN}✅ Git rollback completed${NC}"
+            return 0
+        fi
+    fi
+
+    # File rollback from latest backup
+    local last_backup=""
+    if command -v jq >/dev/null 2>&1; then
+        last_backup=$(jq -r '.last_backup // ""' "$STATE_FILE" 2>/dev/null || echo "")
+    fi
+
+    if [[ -n "$last_backup" && -d "$BACKUP_DIR/$last_backup" ]]; then
+        echo -e "${YELLOW}🔄 Restoring from backup: $last_backup${NC}"
+
+        # Remove everything except hidden system files
+        find . -maxdepth 1 -not -name '.*' -not -name '.git' -exec rm -rf {} + 2>/dev/null || true
+
+        # Restore from backup
+        if cp -r "$BACKUP_DIR/$last_backup/"* . 2>/dev/null; then
+            echo -e "${GREEN}✅ Files restored from backup${NC}"
+            return 0
+        fi
+    fi
+
+    echo -e "${RED}❌ No backup found for rollback${NC}"
+    return 1
+}
+
+# ========================================
+# MONITORING
+# ========================================
+monitor_changes() {
+    # Check only if it's git repo and only quick check
+    if [[ -d ".git" ]]; then
+        local changed=$(timeout 2 git status --porcelain 2>/dev/null | wc -l)
+        if [[ $changed -gt 15 ]]; then
+            echo -e "${YELLOW}⚠️  WARNING: $changed files changed! Consider backup.${NC}"
+        fi
+    fi
+}
+
+start_monitor() {
+    # Start monitor with longer intervals for large projects
+    local interval=60
+
+    # If many files, increase interval
+    local file_count=$(find . -maxdepth 2 -type f 2>/dev/null | wc -l)
+    if [[ $file_count -gt $MAX_MONITOR_FILES ]]; then
+        interval=300  # 5 minutes for large projects
+    fi
+
+    (
+        while true; do
+            sleep $interval
+            monitor_changes 2>/dev/null || true
+        done
+    ) &
+    MONITOR_PID=$!
+    echo -e "${GREEN}🔍 Background monitor started (PID: $MONITOR_PID)${NC}"
+}
+
+stop_monitor() {
+    if [[ -n "$MONITOR_PID" ]]; then
+        kill $MONITOR_PID 2>/dev/null || true
+        echo -e "${BLUE}🔍 Background monitor stopped${NC}"
+    fi
+}
+
+# ========================================
+# COMMAND OVERRIDES
 # ========================================
 
 # Override rm
@@ -258,7 +401,7 @@ rm() {
     command rm "$@"
 }
 
-# Override git z niebezpiecznymi flagami
+# Override git with dangerous flags
 git() {
     local cmd="git $*"
     if ! check_dangerous_command "$cmd"; then
@@ -268,15 +411,15 @@ git() {
     command git "$@"
 }
 
-# Override python dla niebezpiecznych skryptów
+# Override python for dangerous scripts
 python() {
     local file="$1"
     if [[ -f "$file" ]]; then
-        # Sprawdź czy plik zawiera niebezpieczne wzorce
-        if grep -q "os.system\|eval(\|exec(\|subprocess.*shell=True" "$file" 2>/dev/null; then
+        # Check if file contains dangerous patterns
+        if timeout 2 grep -q "os\.system\|eval(\|exec(\|subprocess.*shell=True" "$file" 2>/dev/null; then
             echo -e "${RED}🚨 Dangerous Python code detected in: $file${NC}"
             echo -e "${YELLOW}Content preview:${NC}"
-            grep -n "os.system\|eval(\|exec(\|subprocess.*shell=True" "$file" | head -5
+            grep -n "os\.system\|eval(\|exec(\|subprocess.*shell=True" "$file" 2>/dev/null | head -3
             echo -e "${RED}Use 'force_python $file' to run anyway${NC}"
             return 1
         fi
@@ -288,7 +431,7 @@ python() {
 npm() {
     local cmd="npm $*"
 
-    # Sprawdź czy to install nowych pakietów
+    # Check if it's installing new packages
     if [[ "$1" == "install" && "$#" -gt 1 ]]; then
         echo -e "${YELLOW}🔍 Installing new packages: ${*:2}${NC}"
         echo -e "${BLUE}Creating backup before package installation...${NC}"
@@ -299,7 +442,7 @@ npm() {
 }
 
 # ========================================
-# SAFE COMMANDS (omijają blokady)
+# SAFE COMMANDS (bypass blocks)
 # ========================================
 safe_rm() {
     echo -e "${YELLOW}⚠️  Using SAFE RM - creating backup first${NC}"
@@ -337,19 +480,6 @@ health() {
     check_project_health
 }
 
-# Quick check dla LLM
-check() {
-    echo -e "${BLUE}🔍 Quick health check...${NC}"
-    if check_project_health >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ SYSTEM OK${NC}"
-        return 0
-    else
-        echo -e "${RED}❌ ISSUES DETECTED${NC}"
-        echo -e "${YELLOW}Run 'health' for details${NC}"
-        return 1
-    fi
-}
-
 # Emergency reset
 emergency() {
     echo -e "${RED}🚨 EMERGENCY MODE${NC}"
@@ -361,7 +491,7 @@ emergency() {
     fi
 }
 
-# Dodaj pattern do blokady
+# Add pattern to blocklist
 block() {
     local pattern="$1"
     if [[ -n "$pattern" ]]; then
@@ -369,38 +499,6 @@ block() {
         echo -e "${GREEN}✅ Added pattern to blocklist: $pattern${NC}"
     else
         echo -e "${RED}Usage: block 'dangerous_pattern'${NC}"
-    fi
-}
-
-# ========================================
-# MONITORING W TLE
-# ========================================
-monitor_changes() {
-    # Sprawdź czy się zmieniło dużo plików
-    if [[ -d ".git" ]]; then
-        local changed=$(git status --porcelain 2>/dev/null | wc -l)
-        if [[ $changed -gt 15 ]]; then
-            echo -e "${YELLOW}⚠️  WARNING: $changed files changed! Consider backup.${NC}"
-        fi
-    fi
-}
-
-# Auto-monitor co 60 sekund w tle
-start_monitor() {
-    (
-        while true; do
-            sleep 60
-            monitor_changes
-        done
-    ) &
-    MONITOR_PID=$!
-    echo -e "${GREEN}🔍 Background monitor started (PID: $MONITOR_PID)${NC}"
-}
-
-stop_monitor() {
-    if [[ -n "$MONITOR_PID" ]]; then
-        kill $MONITOR_PID 2>/dev/null
-        echo -e "${BLUE}🔍 Background monitor stopped${NC}"
     fi
 }
 
@@ -431,16 +529,16 @@ llm_help() {
 }
 
 # ========================================
-# INICJALIZACJA PRZY ŹRÓDŁOWANIU
+# INITIALIZATION WHEN SOURCED
 # ========================================
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-    # Skrypt jest source'owany
-    init_shellguard
+    # Script is being sourced
+    init_llm_guard
 
-    # Uruchom monitor w tle
+    # Start monitor in background
     start_monitor
 
-    # Trap na exit żeby zatrzymać monitor
+    # Trap on exit to stop monitor
     trap 'stop_monitor' EXIT
 
     echo -e "${GREEN}🎯 Type 'llm_help' for commands${NC}"
@@ -449,10 +547,10 @@ if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
 fi
 
 # ========================================
-# JEŚLI URUCHOMIONY JAKO SKRYPT
+# IF RUN AS SCRIPT
 # ========================================
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Uruchomiony jako skrypt - wykonaj komendę
+    # Run as script - execute command
     case "$1" in
         "install")
             echo "Installing LLM Guard..."
@@ -460,7 +558,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             echo "source $(realpath "$0")"
             ;;
         "status"|"health"|"check"|"backup"|"rollback"|"emergency")
-            init_shellguard >/dev/null 2>&1
+            init_llm_guard >/dev/null 2>&1
             $1
             ;;
         *)

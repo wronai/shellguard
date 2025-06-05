@@ -64,9 +64,11 @@ test-basic: ## Run basic functionality tests
 	@echo "$(YELLOW)Running basic tests...$(RESET)"
 	@./$(SCRIPTS_DIR)/run-basic-tests.sh
 
-test-quick-install: ## Test the quick installation process
-	@echo "$(YELLOW)Testing quick installation...$(RESET)"
-	@./$(SCRIPTS_DIR)/test-quick-install.sh
+test-installation: ## Test the installation process
+	@echo "$(YELLOW)Testing installation...$(RESET)"
+	sudo ./$(SCRIPTS_DIR)/test-installation.sh
+
+test-quick-install: test-installation ## Alias for test-installation
 
 coverage: ## Generate test coverage report
 	@echo "$(YELLOW)Generating coverage report...$(RESET)"
