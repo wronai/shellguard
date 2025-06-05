@@ -16,6 +16,12 @@ services:
       - SHELLGUARD_ENV=development
       - SHELLGUARD_AUTO_BACKUP=true
       - SHELLGUARD_MONITOR=true
+    healthcheck:
+      test: ["CMD", "bash", "-c", "pgrep -f 'bash.*shellguard' || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     stdin_open: true
     tty: true
     networks:
@@ -34,10 +40,17 @@ services:
       - SHELLGUARD_ENV=testing
       - SHELLGUARD_AUTO_BACKUP=false
       - SHELLGUARD_STRICT_MODE=true
+    healthcheck:
+      test: ["CMD", "bash", "-c", "test -f /usr/local/bin/shellguard.sh && exit 0 || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     networks:
       - shellguard-net
     depends_on:
-      - dev
+      dev:
+        condition: service_healthy
 
   # Ansible controller
   ansible:
@@ -47,15 +60,27 @@ services:
       - ../ansible:/ansible:ro
       - test-results:/test-results
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ../scripts:/scripts:ro
     working_dir: /ansible
     environment:
       - ANSIBLE_HOST_KEY_CHECKING=False
       - SHELLGUARD_TEST_MODE=true
+      - PYTHONUNBUFFERED=1
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "echo 'Waiting for services to be ready...' &&
+       sleep 10 &&
+       echo 'Running Ansible playbooks...' &&
+       ansible-playbook -i inventory/hosts.yml playbooks/test-shellguard.yml --syntax-check &&
+       ansible-playbook -i inventory/hosts.yml playbooks/test-shellguard.yml
+      "
     networks:
       - shellguard-net
     depends_on:
-      - dev
-      - test
+      dev:
+        condition: service_healthy
+      test:
+        condition: service_healthy
 
 volumes:
   shellguard-cache:

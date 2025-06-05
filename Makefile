@@ -56,9 +56,13 @@ lint: ## Run linters
 	test -f .pre-commit-config.yaml && pre-commit run --all-files || true
 	@echo "$(GREEN)Linting passed!$(RESET)"
 
-test: ## Run tests
-	@echo "$(YELLOW)Running tests...$(RESET)"
+test: ## Run all tests
+	@echo "$(YELLOW)Running all tests...$(RESET)"
 	@./$(SCRIPTS_DIR)/run-tests.sh
+
+test-basic: ## Run basic functionality tests
+	@echo "$(YELLOW)Running basic tests...$(RESET)"
+	@./$(SCRIPTS_DIR)/run-basic-tests.sh
 
 coverage: ## Generate test coverage report
 	@echo "$(YELLOW)Generating coverage report...$(RESET)"

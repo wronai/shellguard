@@ -3,6 +3,13 @@
 ## 🚀 INSTALACJA (30 sekund):
 
 ```bash
+# Quick install:
+curl -fsSL https://raw.githubusercontent.com/wronai/shellguard/main/shellguard.sh | bash
+```
+
+
+## 🚀 INSTALACJA (4 kroki):
+```bash
 # 1. Pobierz shell (jeden plik!)
 curl -o shellguard.sh https://raw.githubusercontent.com/wronai/shellguard/main/shellguard.sh
 
