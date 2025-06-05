@@ -1,8 +1,7 @@
-# ide_integration.py
 """
 Integration layer for popular IDEs
 """
-
+import LLMProxyServer
 
 class CursorIntegration:
     """Integration with Cursor IDE"""
