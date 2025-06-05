@@ -1,0 +1,24 @@
+shellguard-docker-example/
+├── docker/
+│   ├── Dockerfile.dev
+│   ├── Dockerfile.test
+│   └── docker-compose.yml
+├── ansible/
+│   ├── inventory/
+│   │   └── hosts.yml
+│   ├── playbooks/
+│   │   ├── setup-shellguard.yml
+│   │   ├── test-shellguard.yml
+│   │   └── verify-environment.yml
+│   └── roles/
+│       └── shellguard/
+│           ├── tasks/main.yml
+│           ├── templates/
+│           │   └── shellguard.sh.j2
+│           └── files/
+│               └── test-scripts/
+├── scripts/
+│   ├── run-tests.sh
+│   └── demo-scenarios.sh
+├── shellguard.sh
+└── README.md
